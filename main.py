@@ -92,11 +92,32 @@ def dice_loss(logits, target, smooth=1e-6):
 # ---------------- Training ----------------
 def train_model():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    transform = T.Compose([T.Resize((224,224)), T.ToTensor()])
+    # Data augmentations: spatial + color
+    transform = T.Compose([
+        T.Resize((224,224)),
+        T.RandomHorizontalFlip(p=0.5),
+        T.RandomVerticalFlip(p=0.5),
+        T.RandomRotation(degrees=15),
+        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        T.ToTensor()
+    ])
 
     train_ds = CasiaSegmentationDataset("dataset/new_with_masks/train", transform)
     val_ds   = CasiaSegmentationDataset("dataset/new_with_masks/val",   transform)
-    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True)
+
+    # Oversampling manipulated samples
+    # Compute sample weights: higher for 'manipulated' (mask contains positives)
+    sample_weights = []
+    # Estimate pos presence per sample
+    for x, y in train_ds:
+        # y: [1,H,W]
+        if y.sum() > 0:
+            sample_weights.append(2.0)  # weight for manipulated
+        else:
+            sample_weights.append(1.0)  # weight for background
+    sampler = torch.utils.data.WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+
+    train_loader = DataLoader(train_ds, batch_size=8, sampler=sampler)
     val_loader   = DataLoader(val_ds,   batch_size=8, shuffle=False)
 
     model = ConvNextUNet().to(device)
@@ -112,7 +133,7 @@ def train_model():
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     num_epochs = 10
 
-    mlflow.set_experiment("convnext_casia_segmentation_weighted_v3")
+    mlflow.set_experiment("convnext_unet_weights_v4")
     with mlflow.start_run():
         mlflow.log_params({"model": "convnext_unet", "epochs": num_epochs,
                            "batch_size": 8, "pos_weight": pos_weight.item()})
@@ -123,6 +144,7 @@ def train_model():
             for x, y in tqdm(train_loader, desc=f"Train e{epoch+1}"):
                 x, y = x.to(device), y.to(device)
                 logits = model(x)
+                # Combined loss
                 loss_bce = bce_fn(logits, y)
                 loss_focal = sigmoid_focal_loss(logits, y, alpha=0.25, gamma=2.0, reduction='mean')
                 loss_dice = dice_loss(logits, y)
@@ -140,20 +162,21 @@ def train_model():
                 for x, y in tqdm(val_loader, desc=f"Val   e{epoch+1}"):
                     x, y = x.to(device), y.to(device)
                     logits = model(x)
-                    # Ensure focal uses reduction
+                    # Combined loss with mean reduction
                     loss_bce = bce_fn(logits, y)
                     loss_focal = sigmoid_focal_loss(logits, y, alpha=0.25, gamma=2.0, reduction='mean')
                     loss_dice = dice_loss(logits, y)
-                    batch_loss = loss_bce + loss_focal + loss_dice
-                    val_loss += batch_loss.item()
+                    batch_loss = (loss_bce + loss_focal + loss_dice).item()
+                    val_loss += batch_loss
             mlflow.log_metric("val_loss", val_loss/len(val_loader), step=epoch)
 
-            print(f"Epoch {epoch+1}/{num_epochs} -> train_loss: {train_loss/len(train_loader):.4f}, \n"
-                  f"val_loss: {val_loss/len(val_loader):.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs} -> train_loss: {train_loss/len(train_loader):.4f}, \
+                  val_loss: {val_loss/len(val_loader):.4f}")
 
+        # Save and log model
         mlflow.pytorch.log_model(model, artifact_path="model")
-        torch.save(model.state_dict(), "convnext_casia_segmentation_weighted_v3.pth")
-        mlflow.log_artifact("convnext_casia_segmentation_weighted_v3.pth")
+        torch.save(model.state_dict(), "convnext_unet_weights_v4.pth")
+        mlflow.log_artifact("convnext_unet_weights.pth")
         print("Local model weights saved.")
 
 if __name__ == "__main__":
