@@ -4,10 +4,12 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import torch.nn as nn
+import torch.nn.functional as F
 import timm
 from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
+from torchvision.ops import sigmoid_focal_loss
 
 # ---------------- Dataset ----------------
 class CasiaSegmentationDataset(Dataset):
@@ -36,28 +38,56 @@ class CasiaSegmentationDataset(Dataset):
             fft = self.transform(fft)
             mask = T.Resize(img.shape[1:])(T.ToTensor()(mask))
 
-        # concat RGB + FFT
         x = torch.cat([img, fft], dim=0)
         y = (mask > 0.5).float()
         return x, y
 
-# ---------------- Model ----------------
-class ConvNextSegmenter(nn.Module):
+# ---------------- Model (UNet-like) ----------------
+class ConvNextUNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = timm.create_model("convnext_tiny", pretrained=True, in_chans=4, features_only=True)
-        c = self.encoder.feature_info[-1]['num_chs']
-        self.decoder = nn.Sequential(
-            nn.Conv2d(c, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 1, 1),
-            nn.Sigmoid()
+        feats = self.encoder.feature_info
+        self.chs = [f['num_chs'] for f in feats]
+        # Upsample layers
+        self.up3 = nn.ConvTranspose2d(self.chs[3], self.chs[2], kernel_size=2, stride=2)
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(self.chs[2]*2, self.chs[2], 3, padding=1), nn.ReLU(),
+            nn.Conv2d(self.chs[2], self.chs[2], 3, padding=1), nn.ReLU()
         )
+        self.up2 = nn.ConvTranspose2d(self.chs[2], self.chs[1], kernel_size=2, stride=2)
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(self.chs[1]*2, self.chs[1], 3, padding=1), nn.ReLU(),
+            nn.Conv2d(self.chs[1], self.chs[1], 3, padding=1), nn.ReLU()
+        )
+        self.up1 = nn.ConvTranspose2d(self.chs[1], self.chs[0], kernel_size=2, stride=2)
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(self.chs[0]*2, self.chs[0], 3, padding=1), nn.ReLU(),
+            nn.Conv2d(self.chs[0], self.chs[0], 3, padding=1), nn.ReLU()
+        )
+        self.final = nn.Conv2d(self.chs[0], 1, kernel_size=1)
 
     def forward(self, x):
-        f = self.encoder(x)[-1]
-        out = self.decoder(f)
-        return nn.functional.interpolate(out, size=x.shape[2:], mode='bilinear', align_corners=False)
+        s1, s2, s3, s4 = self.encoder(x)
+        d3 = self.up3(s4)
+        d3 = torch.cat([d3, s3], dim=1)
+        d3 = self.dec3(d3)
+        d2 = self.up2(d3)
+        d2 = torch.cat([d2, s2], dim=1)
+        d2 = self.dec2(d2)
+        d1 = self.up1(d2)
+        d1 = torch.cat([d1, s1], dim=1)
+        d1 = self.dec1(d1)
+        out = self.final(F.interpolate(d1, size=x.shape[2:], mode='bilinear', align_corners=False))
+        return out
+
+# ---------------- Loss functions ----------------
+def dice_loss(logits, target, smooth=1e-6):
+    pred = torch.sigmoid(logits)
+    pred_flat = pred.view(-1)
+    target_flat = target.view(-1)
+    intersection = (pred_flat * target_flat).sum()
+    return 1 - ((2 * intersection + smooth) / (pred_flat.sum() + target_flat.sum() + smooth))
 
 # ---------------- Training ----------------
 def train_model():
@@ -69,48 +99,62 @@ def train_model():
     train_loader = DataLoader(train_ds, batch_size=8, shuffle=True)
     val_loader   = DataLoader(val_ds,   batch_size=8, shuffle=False)
 
-    model = ConvNextSegmenter().to(device)
-    criterion = nn.BCELoss()
+    model = ConvNextUNet().to(device)
+    # pos_weight for BCE
+    total, pos = 0, 0
+    for _, m in train_loader:
+        total += m.numel()
+        pos += (m>0).sum().item()
+    neg = total - pos
+    pos_weight = torch.tensor([neg/pos]).to(device)
+    bce_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    num_epochs = 10
 
-    num_epochs = 5
-    save_local = "convnext_segmentation_v2.pth"
-
-    mlflow.set_experiment("convnext_casia_segmentation")
+    mlflow.set_experiment("convnext_casia_segmentation_weighted_v3")
     with mlflow.start_run():
-        mlflow.log_params({"model": "convnext_tiny", "epochs": num_epochs, "batch_size": 8})
+        mlflow.log_params({"model": "convnext_unet", "epochs": num_epochs,
+                           "batch_size": 8, "pos_weight": pos_weight.item()})
 
-        for e in range(num_epochs):
+        for epoch in range(num_epochs):
             model.train()
             train_loss = 0
-            for x,y in tqdm(train_loader, desc=f"Train e{e+1}"):
-                x,y = x.to(device), y.to(device)
-                pred = model(x)
-                loss = criterion(pred, y)
-                optimizer.zero_grad(); loss.backward(); optimizer.step()
+            for x, y in tqdm(train_loader, desc=f"Train e{epoch+1}"):
+                x, y = x.to(device), y.to(device)
+                logits = model(x)
+                loss_bce = bce_fn(logits, y)
+                loss_focal = sigmoid_focal_loss(logits, y, alpha=0.25, gamma=2.0, reduction='mean')
+                loss_dice = dice_loss(logits, y)
+                loss = loss_bce + loss_focal + loss_dice
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
                 train_loss += loss.item()
-            avg_tr = train_loss/len(train_loader)
-            mlflow.log_metric("train_loss", avg_tr, step=e)
+            mlflow.log_metric("train_loss", train_loss/len(train_loader), step=epoch)
 
             model.eval()
             val_loss = 0
             with torch.no_grad():
-                for x,y in tqdm(val_loader, desc=f"Val   e{e+1}"):
-                    x,y = x.to(device), y.to(device)
-                    loss = criterion(model(x), y)
-                    val_loss += loss.item()
-            avg_val = val_loss/len(val_loader)
-            mlflow.log_metric("val_loss", avg_val, step=e)
+                for x, y in tqdm(val_loader, desc=f"Val   e{epoch+1}"):
+                    x, y = x.to(device), y.to(device)
+                    logits = model(x)
+                    # Ensure focal uses reduction
+                    loss_bce = bce_fn(logits, y)
+                    loss_focal = sigmoid_focal_loss(logits, y, alpha=0.25, gamma=2.0, reduction='mean')
+                    loss_dice = dice_loss(logits, y)
+                    batch_loss = loss_bce + loss_focal + loss_dice
+                    val_loss += batch_loss.item()
+            mlflow.log_metric("val_loss", val_loss/len(val_loader), step=epoch)
 
-            print(f"Epoch {e+1}/{num_epochs} -> train_loss: {avg_tr:.4f}, val_loss: {avg_val:.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs} -> train_loss: {train_loss/len(train_loader):.4f}, \n"
+                  f"val_loss: {val_loss/len(val_loader):.4f}")
 
-        # log model to MLflow
         mlflow.pytorch.log_model(model, artifact_path="model")
-
-        # save local weights
-        torch.save(model.state_dict(), save_local)
-        mlflow.log_artifact(save_local)
-        print(f"Local model weights saved to {save_local}")
+        torch.save(model.state_dict(), "convnext_casia_segmentation_weighted_v3.pth")
+        mlflow.log_artifact("convnext_casia_segmentation_weighted_v3.pth")
+        print("Local model weights saved.")
 
 if __name__ == "__main__":
     train_model()

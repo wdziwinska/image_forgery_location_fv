@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from PIL import Image
 from sklearn.metrics import jaccard_score, f1_score, classification_report
-from main import ConvNextSegmenter, CasiaSegmentationDataset  # ensure these are defined in main.py
+from main import ConvNextUNet, CasiaSegmentationDataset  # ensure these are defined in main.py
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -61,7 +61,7 @@ def evaluate_model(model_path, data_path, save_viz=True):
     # Load model (handle both state_dict and full model)
     loaded = torch.load(model_path, map_location=device, weights_only=False)
     if isinstance(loaded, dict):
-        model = ConvNextSegmenter().to(device)
+        model = ConvNextUNet().to(device)
         model.load_state_dict(loaded)
     else:
         model = loaded.to(device)
@@ -111,7 +111,7 @@ def evaluate_model(model_path, data_path, save_viz=True):
 
 if __name__ == "__main__":
     evaluate_model(
-        model_path="convnext_segmentation_v2.pth",
+        model_path="convnext_casia_segmentation_weighted_v3.pth",
         # model_path="mlruns/323918849388816282/e992d302328640f99b69577fb3662561/artifacts/model/data/model.pth",
         data_path="dataset/new_with_masks/val"
     )
