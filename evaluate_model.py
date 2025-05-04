@@ -91,7 +91,7 @@ def evaluate_model(model_path, data_path, save_viz=True):
 
             # Visualization
             if save_viz and idx < 20:
-                visualize(inputs[0], masks[0], outputs[0], save_path=f"eval_outputs/viz_{idx}.png")
+                visualize(inputs[0], masks[0], outputs[0], save_path=f"eval_outputs/{model_path}_{idx}.png")
 
     # Print average metrics
     print(f"IoU avg:  {sum(ious)/len(ious):.4f}")
@@ -106,12 +106,12 @@ def evaluate_model(model_path, data_path, save_viz=True):
     print(report)
 
     # Save report to file
-    with open("eval_outputs/classification_report.txt", "w") as f:
+    with open("eval_outputs/convnext_unet_weights_v5.txt", "w") as f:
         f.write(report)
 
 if __name__ == "__main__":
     evaluate_model(
-        model_path="convnext_unet_weights_v4.pth",
+        model_path="convnext_unet_weights_v5.pth",
         # model_path="mlruns/323918849388816282/e992d302328640f99b69577fb3662561/artifacts/model/data/model.pth",
         data_path="dataset/new_with_masks/val"
     )
