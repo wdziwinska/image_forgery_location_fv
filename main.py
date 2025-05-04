@@ -1,7 +1,7 @@
 import os
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torchvision.transforms as T
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,7 +45,6 @@ class ConvNextUNet(nn.Module):
         self.encoder = timm.create_model("convnext_tiny", pretrained=True, in_chans=4, features_only=True)
         feats = self.encoder.feature_info
         chs = [f['num_chs'] for f in feats]  # [s1,s2,s3,s4]
-        # decoder blocks
         self.up3 = nn.ConvTranspose2d(chs[3], chs[2], 2, stride=2)
         self.dec3 = nn.Sequential(
             nn.Conv2d(chs[2]*2, chs[2], 3, padding=1), nn.ReLU(),
@@ -78,10 +77,18 @@ def dice_loss(logits, target, smooth=1e-6):
     inter = (pred * tgt).sum()
     return 1 - ((2 * inter + smooth) / (pred.sum() + tgt.sum() + smooth))
 
+def tversky_loss(logits, target, alpha=0.7, beta=0.3, smooth=1e-6):
+    probs = torch.sigmoid(logits).view(-1)
+    tgt = target.view(-1)
+    TP = (probs * tgt).sum()
+    FN = ((1 - probs) * tgt).sum()
+    FP = (probs * (1 - tgt)).sum()
+    tversky = (TP + smooth) / (TP + alpha * FN + beta * FP + smooth)
+    return 1 - tversky
+
 # ---------------- Training ----------------
 def train_model():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # augmentations
     transform = T.Compose([
         T.Resize((224,224)),
         T.RandomHorizontalFlip(0.5), T.RandomVerticalFlip(0.5),
@@ -90,70 +97,72 @@ def train_model():
         T.ToTensor()
     ])
     train_ds = CasiaSegmentationDataset("dataset/new_with_masks/train", transform)
-    val_ds   = CasiaSegmentationDataset("dataset/new_with_masks/val",   transform)
-    # sampler for oversampling
-    weights = [2.0 if (CasiaSegmentationDataset.__getitem__(train_ds, i)[1].sum()>0) else 1.0
-               for i in range(len(train_ds))]
-    sampler = torch.utils.data.WeightedRandomSampler(weights, len(weights), replacement=True)
+    val_ds   = CasiaSegmentationDataset("dataset/new_with_masks/val", transform)
+    # Oversample manipulated samples
+    weights = [2.0 if train_ds[i][1].sum()>0 else 1.0 for i in range(len(train_ds))]
+    sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=8, sampler=sampler)
     val_loader   = DataLoader(val_ds, batch_size=8, shuffle=False)
 
     model = ConvNextUNet().to(device)
-    # compute pos_weight
-    total=pos=0
-    for _,m in train_loader:
-        total+=m.numel(); pos+=(m>0).sum().item()
-    neg = total-pos
+    # Compute pos_weight for BCE
+    total, pos = 0, 0
+    for _, m in train_loader:
+        total += m.numel(); pos += (m>0).sum().item()
+    neg = total - pos
     pos_w = torch.tensor([neg/pos], device=device)
     bce_fn = nn.BCEWithLogitsLoss(pos_weight=pos_w)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    # scheduler: reduce LR when val_loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
                                                            patience=2, min_lr=1e-6)
-    num_epochs = 5
+    num_epochs = 10
 
-    mlflow.set_experiment("convnext_unet_weights_v5")
+    mlflow.set_experiment("convnext_unet_final_weights_v6")
     with mlflow.start_run():
         mlflow.log_params({"model":"convnext_unet","epochs":num_epochs,
-                           "batch_size":8,"pos_weight":pos_w.item()})
-        mlflow.log_params({"optimizer":"Adam","lr_init":1e-4,
+                           "batch_size":8,"pos_weight":pos_w.item(),
+                           "optimizer":"Adam","lr_init":1e-4,
                            "scheduler":"ReduceLROnPlateau"})
 
         for epoch in range(num_epochs):
-            model.train(); train_loss=0
-            for x,y in tqdm(train_loader, desc=f"Train e{epoch+1}"):
-                x,y = x.to(device), y.to(device)
+            model.train(); train_loss = 0
+            for x, y in tqdm(train_loader, desc=f"Train e{epoch+1}"):
+                x, y = x.to(device), y.to(device)
                 logits = model(x)
-                loss_bce   = bce_fn(logits,y)
-                loss_focal = sigmoid_focal_loss(logits,y,alpha=0.25,gamma=2.0,reduction='mean')
-                loss_dice  = dice_loss(logits,y)
-                loss = loss_bce+loss_focal+loss_dice
+                loss = (
+                    bce_fn(logits,y)
+                    + sigmoid_focal_loss(logits,y,alpha=0.25,gamma=2.0,reduction='mean')
+                    + dice_loss(logits,y)
+                    + tversky_loss(logits,y)
+                )
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
-                train_loss+=loss.item()
+                train_loss += loss.item()
             avg_tr = train_loss/len(train_loader)
             mlflow.log_metric("train_loss", avg_tr, step=epoch)
 
-            model.eval(); val_loss=0
+            model.eval(); val_loss = 0
             with torch.no_grad():
-                for x,y in tqdm(val_loader, desc=f"Val   e{epoch+1}"):
-                    x,y = x.to(device), y.to(device)
+                for x, y in tqdm(val_loader, desc=f"Val   e{epoch+1}"):
+                    x, y = x.to(device), y.to(device)
                     logits = model(x)
-                    l = (bce_fn(logits,y)
-                         + sigmoid_focal_loss(logits,y,alpha=0.25,gamma=2.0,reduction='mean')
-                         + dice_loss(logits,y))
-                    val_loss+=l.item()
+                    loss_val = (
+                        bce_fn(logits,y)
+                        + sigmoid_focal_loss(logits,y,alpha=0.25,gamma=2.0,reduction='mean')
+                        + dice_loss(logits,y)
+                        + tversky_loss(logits,y)
+                    )
+                    val_loss += loss_val.item()
             avg_val = val_loss/len(val_loader)
             mlflow.log_metric("val_loss", avg_val, step=epoch)
-            # step scheduler on validation loss
             scheduler.step(avg_val)
+            print(f"Epoch {epoch+1}/{num_epochs} -> train_loss: {avg_tr:.4f}, "
+                  f"val_loss: {avg_val:.4f}, lr: {optimizer.param_groups[0]['lr']:.1e}")
 
-            print(f"Epoch {epoch+1}/{num_epochs} -> train_loss: {avg_tr:.4f}, val_loss: {avg_val:.4f}, lr: {optimizer.param_groups[0]['lr']:.1e}")
-
-        # log & save model
+        # Save and log model
         mlflow.pytorch.log_model(model, artifact_path="model")
-        torch.save(model.state_dict(), "convnext_unet_weights_v5.pth")
-        mlflow.log_artifact("convnext_unet_weights_v5.pth")
+        torch.save(model.state_dict(), "convnext_unet_final_weights_v6.pth")
+        mlflow.log_artifact("convnext_unet_final_weights_v6.pth")
         print("Local model weights saved.")
 
 if __name__ == "__main__":
