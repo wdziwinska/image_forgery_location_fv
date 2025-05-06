@@ -58,18 +58,27 @@ def main():
     model = load_model(MODEL_PATH, device)
 
     st.title('Detekcja i lokalizacja manipulacji obrazu (Maska)')
-    uploaded_file = st.file_uploader("Wybierz zdjęcie do analizy", type=['png', 'jpg', 'jpeg', 'tif', 'tiff'])
+    # Obsługa plików TIFF
+    uploaded_file = st.file_uploader(
+        "Wybierz zdjęcie do analizy",
+        type=['png', 'jpg', 'jpeg', 'tif', 'tiff']
+    )
     if uploaded_file:
-        image = Image.open(uploaded_file).convert('RGB')
+        # Otwieranie pliku TIFF również
+        image = Image.open(uploaded_file)
+        # Jeśli obraz ma więcej kanałów, konwertujemy na RGB
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
         cols = st.columns(2)
-        cols[0].image(image, caption='Oryginalny obraz', use_column_width=True)
+        cols[0].image(image, caption='Oryginalny obraz', use_container_width=True)
 
         mask_img, mask_np = predict(image, model, device)
         if not mask_np.any():
             cols[1].write('Brak wykrytej manipulacji na obrazie.')
             st.success('Brak wykrytej manipulacji.')
         else:
-            cols[1].image(mask_img, caption='Maska manipulacji', use_column_width=True)
+            cols[1].image(mask_img, caption='Maska manipulacji', use_container_width=True)
             st.write('Manipulacja wykryta.')
 
 if __name__ == "__main__":
