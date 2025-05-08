@@ -11,7 +11,7 @@ from main import ConvNextUNet, CasiaPatchSegDataset  # patch-based dataset and U
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Paths
-MODEL_PATH = "convnext_patch_segmentation.pth"
+MODEL_PATH = "convnext_patch_segmentation_base.pth"
 DATA_PATH  = "dataset/new_with_masks/val"
 VIZ_DIR    = "eval_outputs"
 os.makedirs(VIZ_DIR, exist_ok=True)
