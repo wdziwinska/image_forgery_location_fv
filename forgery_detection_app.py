@@ -19,6 +19,42 @@ from torchvision import transforms, models
 import torch.nn as nn
 import timm
 
+# Ustawienia stylu jasny motyw (białe tło, ciemny tekst)
+st.set_page_config(page_title="Detekcja manipulacji", layout="centered")
+st.markdown("""
+    <style>
+    /* Ustaw tło aplikacji na białe i tekst na czarny */
+    .stApp {
+        background-color: #ffffff;
+        color: #000000;
+    }
+    /* Dopasuj style nagłówków i przycisków */
+    h1, h2, h3, .css-18ni7ap.e8zbici2 {
+        color: #000000;
+    }
+    .stButton>button {
+        background-color: #f0f0f0;
+        color: #000000;
+        border: 1px solid #cccccc;
+    }
+    /* Alert boxes (success & error) background and text */
+    div.stAlert, .stAlert {
+        color: #000000 !important;
+    }
+    /* Apply black text to all elements inside alerts */
+    div.stAlert * {
+        color: #000000 !important;
+    }
+    /* Optional: customize success and error backgrounds */
+    div.stAlert.success {
+        background-color: #e6f4ea !important; /* light green */
+    }
+    div.stAlert.error {
+        background-color: #fdecea !important; /* light red */
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ---------------- Removal detection (DeepLabV3) ----------------
 @st.cache_resource
 def load_removal_model(device=torch.device('cpu')):
@@ -142,7 +178,6 @@ def main():
             scale = MAX_DIM / max(w, h)
             img = img.resize((int(w*scale), int(h*scale)), Image.ANTIALIAS)
             st.warning(f"Obraz przekracza maksymalny rozmiar {MAX_DIM}px; zmieniono rozmiar.")
-                # wyświetl wyśrodkowany obraz, skalując dłuższy bok do 350px
         MAX_DISPLAY = 350
         w_img, h_img = img.size
         # wybierz czy skalować width czy height
@@ -159,19 +194,19 @@ def main():
             '</div>'
         )
         st.markdown(html, unsafe_allow_html=True)
-        st.markdown("<div style='text-align:center; font-size:0.9rem; color:grey;'>Analizowany obraz</div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align:center; font-size:0.9rem; margin-bottom:1.5rem; color:grey;'>Analizowany obraz</div>", unsafe_allow_html=True)
 
         col1, col2 = st.columns(2)
         rem_mask, rem_bool = predict_removal(img, rem_model, device)
         if rem_bool.any():
-            col1.image(rem_mask, caption='Wykryte usunięcia',  use_container_width=True)
+            col1.image(rem_mask, caption='Wykryto manipulację - inpainting',  use_container_width=True)
             col1.error('Usunięto obiekty!')
         else:
             col1.success('Nie wykryto usunięć')
 
         add_mask, add_bool = predict_addition(img, add_model, device)
         if add_bool.any():
-            col2.image(add_mask, caption='Wykryte doklejenia',  use_container_width=True)
+            col2.image(add_mask, caption='Wykryto manipulację - splicing',  use_container_width=True)
             col2.error('Doklejono obiekty!')
         else:
             col2.success('Nie wykryto doklejeń')
