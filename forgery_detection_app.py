@@ -8,6 +8,8 @@ Uruchom:
 """
 
 import os
+import io
+import base64
 import streamlit as st
 from PIL import Image
 import numpy as np
@@ -20,14 +22,12 @@ import timm
 # ---------------- Removal detection (DeepLabV3) ----------------
 @st.cache_resource
 def load_removal_model(device=torch.device('cpu')):
-    # Utworzenie architektury DeepLabV3 bez auxiliary loss
+    # Utworzenie architektury DeepLabV3
     model = models.segmentation.deeplabv3_resnet50(
         pretrained=False, progress=True,
         num_classes=1, aux_loss=False
     )
-    # Zamiana głowicy klasyfikatora na jednokanałową
     model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
-    # Wczytanie wytrenowanych wag (checkpoint zawiera także klucze aux_classifier, które pominiemy)
     ckpt_path = os.path.join('manipulation_detector_v1.pt')
     state = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state, strict=False)
@@ -43,7 +43,7 @@ removal_transform = transforms.Compose([
 def predict_removal(image: Image.Image, model, device, threshold=0.5):
     inp = removal_transform(image).unsqueeze(0).to(device)
     with torch.no_grad():
-        out = model(inp)['out']  # [1,1,H,W]
+        out = model(inp)['out']
         prob = torch.sigmoid(out)[0, 0]
     mask_bool = prob > threshold
     mask_np = (mask_bool.cpu().numpy().astype(np.uint8) * 255)
@@ -95,8 +95,10 @@ def load_addition_model(device=torch.device('cpu')):
     model.to(device).eval()
     return model
 
-# Transformacje i FFT dla dodatkowego modelu
-to_tensor = transforms.ToTensor()
+add_rgb_transform = transforms.Compose([
+    transforms.Resize((128,128)),
+    transforms.ToTensor(),
+])
 
 def compute_fft_channel(image: Image.Image) -> torch.Tensor:
     gray = image.convert('L')
@@ -105,11 +107,6 @@ def compute_fft_channel(image: Image.Image) -> torch.Tensor:
     mag = np.log1p(np.abs(fft))
     mag = (mag - mag.min())/(mag.max()-mag.min()+1e-8)
     return torch.from_numpy(mag).unsqueeze(0)
-
-add_rgb_transform = transforms.Compose([
-    transforms.Resize((128,128)),
-    transforms.ToTensor(),
-])
 
 def predict_addition(image: Image.Image, model, device, threshold=0.5):
     rgb = add_rgb_transform(image)
@@ -128,15 +125,41 @@ def predict_addition(image: Image.Image, model, device, threshold=0.5):
 
 # ---------------- Streamlit App ----------------
 def main():
-    st.title('Detekcja manipulacji obrazu: Usunięcia i Doklejenia')
+    st.markdown(
+        "<h1 style='font-size:32px; text-align:center;'>Detekcja manipulacji obrazu:<br>usunięcia i doklejenia</h1>",
+        unsafe_allow_html=True
+    )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     rem_model = load_removal_model(device)
     add_model = load_addition_model(device)
 
     uploaded = st.file_uploader('Wybierz zdjęcie', type=['png','jpg','jpeg','tif','tiff'])
+    MAX_DIM = 1024
     if uploaded:
         img = Image.open(uploaded).convert('RGB')
-        st.image(img, caption='Oryginał',  use_container_width=True)
+        w, h = img.size
+        if max(w, h) > MAX_DIM:
+            scale = MAX_DIM / max(w, h)
+            img = img.resize((int(w*scale), int(h*scale)), Image.ANTIALIAS)
+            st.warning(f"Obraz przekracza maksymalny rozmiar {MAX_DIM}px; zmieniono rozmiar.")
+                # wyświetl wyśrodkowany obraz, skalując dłuższy bok do 350px
+        MAX_DISPLAY = 350
+        w_img, h_img = img.size
+        # wybierz czy skalować width czy height
+        if w_img >= h_img:
+            disp_attr = f'width="{MAX_DISPLAY}px"'
+        else:
+            disp_attr = f'height="{MAX_DISPLAY}px"'
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        html = (
+            f'<div style="display:flex; justify-content:center;">'
+            f'<img src="data:image/png;base64,{b64}" {disp_attr}/>'
+            '</div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
+        st.markdown("<div style='text-align:center; font-size:0.9rem; color:grey;'>Analizowany obraz</div>", unsafe_allow_html=True)
 
         col1, col2 = st.columns(2)
         rem_mask, rem_bool = predict_removal(img, rem_model, device)
