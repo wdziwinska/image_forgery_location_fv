@@ -63,11 +63,11 @@ model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)  # binary output
 model = model.to(device)
 
 # Optymalizacja
-criterion = nn.BCEWithLogitsLoss()
+criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([4.0]).to(device)) # 4 razy większa kara, jeśli model pomyli manipulackę z tłem
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 # Trening
-for epoch in range(5):  # Zwiększ, jeśli chcesz
+for epoch in range(5):
     model.train()
     total_loss = 0
     for images, masks in train_loader:
@@ -79,6 +79,9 @@ for epoch in range(5):  # Zwiększ, jeśli chcesz
         optimizer.step()
         total_loss += loss.item()
     print(f"Epoch {epoch+1} - Train Loss: {total_loss:.4f}")
+    # Zapis modelu
+    torch.save(model.state_dict(), "./trained_models/manipulation_detector_v3.pt")
+    print("Model zapisany jako manipulation_detector_v3.pt")
 
 # Ewaluacja
 model.eval()
@@ -91,6 +94,3 @@ with torch.no_grad():
         val_loss += loss.item()
     print(f"Validation Loss: {val_loss:.4f}")
 
-# Zapis modelu
-torch.save(model.state_dict(), "manipulation_detector_v1.pt")
-print("Model zapisany jako manipulation_detector_v1.pt")

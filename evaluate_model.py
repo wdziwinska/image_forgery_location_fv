@@ -46,7 +46,7 @@ class ManipulationDataset(Dataset):
 # === Ścieżki ===
 val_img = "split/val/Datasets/defacto-inpainting/inpainting_img/img"
 val_mask = "split/val/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask"
-model_path = "manipulation_detector_v1.pt"
+model_path = "trained_models/manipulation_detector_v3.pt"
 
 # === Dataset i DataLoader ===
 val_ds = ManipulationDataset(val_img, val_mask)
@@ -88,7 +88,7 @@ with torch.no_grad():
             axs[2].set_title("Predykcja")
             for ax in axs: ax.axis('off')
             plt.tight_layout()
-            plt.savefig(f"val_predictions/{id_[0]}.png")
+            plt.savefig(f"val_predictions/{id_[0]}_manipulation_detector_v3.png")
             plt.close()
 
 # === Raport z sklearn ===
