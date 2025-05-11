@@ -176,8 +176,11 @@ def main():
         w, h = img.size
         if max(w, h) > MAX_DIM:
             scale = MAX_DIM / max(w, h)
-            img = img.resize((int(w*scale), int(h*scale)), Image.ANTIALIAS)
-            st.warning(f"Obraz przekracza maksymalny rozmiar {MAX_DIM}px; zmieniono rozmiar.")
+            # jeśli Pillow ≥ 10.0:
+            img = img.resize((int(w * scale), int(h * scale)), resample=Image.Resampling.LANCZOS)
+            # lub (działa też na starszych Pillow):
+            img = img.resize((int(w * scale), int(h * scale)), resample=Image.LANCZOS)
+            # st.warning(f"Obraz przekracza maksymalny rozmiar {MAX_DIM}px; zmieniono rozmiar.")
         MAX_DISPLAY = 350
         w_img, h_img = img.size
         # wybierz czy skalować width czy height
