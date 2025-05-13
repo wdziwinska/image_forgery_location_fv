@@ -136,7 +136,7 @@ if __name__ == "__main__":
     ])
 
     model = ModifiedDeepLab(in_channels=6)
-    state_dict = torch.load("deeplabv3_casia2_v1.pth", map_location='cpu')
+    state_dict = torch.load("deeplabv3_casia2_v2.pth", map_location='cpu')
     model.load_state_dict(state_dict, strict=False)
 
     val_dataset = CASIA2Dataset(
@@ -147,4 +147,4 @@ if __name__ == "__main__":
     )
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
-    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_v1")
+    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_v2")
