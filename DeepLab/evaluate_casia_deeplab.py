@@ -11,10 +11,9 @@ import numpy as np
 
 # === Dataset class ===
 class CASIA2Dataset(Dataset):
-    def __init__(self, img_dir, mask_dir, fft_dir=None, transform=None):
+    def __init__(self, img_dir, mask_dir, transform=None):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
-        self.fft_dir = fft_dir
         self.transform = transform
 
         self.images = sorted([
@@ -39,21 +38,8 @@ class CASIA2Dataset(Dataset):
         image = Image.open(img_path).convert('RGB')
         mask = Image.open(mask_path).convert('L')
 
-        if self.fft_dir:
-            fft_path = os.path.join(self.fft_dir, base_name + '_fft.png')
-            if not os.path.exists(fft_path):
-                raise FileNotFoundError(f"Brak FFT: {fft_path}")
-            fft = Image.open(fft_path).convert('RGB')
-            image = image.resize((256, 256))
-            fft = fft.resize((256, 256))
-            image_np = np.concatenate([np.array(image), np.array(fft)], axis=2)
-            image_np = image_np.astype(np.float32) / 255.0
-            image = torch.from_numpy(image_np).permute(2, 0, 1)
-        else:
-            if self.transform:
-                image = self.transform(image)
-
         if self.transform:
+            image = self.transform(image)
             mask = self.transform(mask)
 
         mask = (mask > 0).float()
@@ -61,7 +47,7 @@ class CASIA2Dataset(Dataset):
 
 # === Model ===
 class ModifiedDeepLab(nn.Module):
-    def __init__(self, in_channels=6):
+    def __init__(self, in_channels=3):
         super(ModifiedDeepLab, self).__init__()
         self.model = models.segmentation.deeplabv3_resnet50(pretrained=False)
         self.model.backbone.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -71,7 +57,7 @@ class ModifiedDeepLab(nn.Module):
         return self.model(x)['out']
 
 # === Evaluation ===
-def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_v2", output_dir="val_output", num_visuals=5):
+def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_v3_rgb_only", output_dir="val_output", num_visuals=5):
     os.makedirs(output_dir, exist_ok=True)
 
     model.eval()
@@ -135,16 +121,15 @@ if __name__ == "__main__":
         transforms.ToTensor()
     ])
 
-    model = ModifiedDeepLab(in_channels=6)
-    state_dict = torch.load("deeplabv3_casia2_v2.pth", map_location='cpu')
+    model = ModifiedDeepLab(in_channels=3)
+    state_dict = torch.load("deeplabv3_casia2_v3_rgb_only.pth", map_location='cpu')
     model.load_state_dict(state_dict, strict=False)
 
     val_dataset = CASIA2Dataset(
         img_dir='dataset/new_with_masks/val/manipulated',
         mask_dir='dataset/new_with_masks/val/groundtruth',
-        fft_dir='dataset/new_with_masks/val/fft',
         transform=transform
     )
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
-    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_v2")
+    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_v3_rgb_only")
