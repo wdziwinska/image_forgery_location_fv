@@ -5,13 +5,13 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
 from sklearn.metrics import precision_recall_curve, classification_report
-from main import ConvNextUNet, CasiaPatchSegDataset  # patch-based dataset and UNet model
+from main import ConvNextUNet, CombinedPatchSegDataset  # patch-based dataset and UNet model
 
 # Device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Paths
-MODEL_PATH = "convnext_patch_segmentation_base.pth"
+MODEL_PATH = "convnext_v10.pth"
 DATA_PATH  = "dataset/new_with_masks/val"
 VIZ_DIR    = "eval_outputs"
 os.makedirs(VIZ_DIR, exist_ok=True)
@@ -27,7 +27,7 @@ def evaluate_and_select_threshold(model_path, data_path, patch_size=128, patches
     model.eval()
 
     transform = T.Compose([T.Resize((patch_size, patch_size)), T.ToTensor()])
-    dataset = CasiaPatchSegDataset(data_path,
+    dataset = CombinedPatchSegDataset(data_path,
                                    patch_size=patch_size,
                                    patches_per_image=patches_per_image,
                                    transform=transform)
@@ -74,7 +74,7 @@ def evaluate_with_threshold(model_path, data_path, threshold, patch_size=128, pa
     model.eval()
 
     transform = T.Compose([T.Resize((patch_size, patch_size)), T.ToTensor()])
-    dataset = CasiaPatchSegDataset(data_path,
+    dataset = CombinedPatchSegDataset(data_path,
                                    patch_size=patch_size,
                                    patches_per_image=patches_per_image,
                                    transform=transform)
