@@ -9,12 +9,12 @@ from torchvision import transforms, models
 from PIL import Image
 import numpy as np
 
-# === Dataset class ===
+# === Dataset class (z DCT w .npy) ===
 class CASIA2Dataset(Dataset):
-    def __init__(self, img_dir, mask_dir, fft_dir=None, transform=None):
+    def __init__(self, img_dir, mask_dir, dct_dir=None, transform=None):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
-        self.fft_dir = fft_dir
+        self.dct_dir = dct_dir
         self.transform = transform
 
         self.images = sorted([
@@ -30,8 +30,7 @@ class CASIA2Dataset(Dataset):
         img_path = os.path.join(self.img_dir, img_filename)
 
         base_name = os.path.splitext(img_filename)[0]
-        mask_filename = base_name + '_gt.png'
-        mask_path = os.path.join(self.mask_dir, mask_filename)
+        mask_path = os.path.join(self.mask_dir, base_name + '_gt.png')
 
         if not os.path.exists(mask_path):
             raise FileNotFoundError(f"Maska nie znaleziona: {mask_path}")
@@ -39,25 +38,28 @@ class CASIA2Dataset(Dataset):
         image = Image.open(img_path).convert('RGB')
         mask = Image.open(mask_path).convert('L')
 
-        if self.fft_dir:
-            fft_path = os.path.join(self.fft_dir, base_name + '_fft.png')
-            if not os.path.exists(fft_path):
-                raise FileNotFoundError(f"Brak FFT: {fft_path}")
-            fft = Image.open(fft_path).convert('RGB')
-            image = image.resize((256, 256))
-            fft = fft.resize((256, 256))
-            image_np = np.concatenate([np.array(image), np.array(fft)], axis=2)
-            image_np = image_np.astype(np.float32) / 255.0
-            image = torch.from_numpy(image_np).permute(2, 0, 1)
-        else:
-            if self.transform:
-                image = self.transform(image)
+        # Przeskalowanie i konwersja do tensora
+        image = image.resize((256, 256))
+        mask = mask.resize((256, 256))
+        image_tensor = transforms.ToTensor()(image)
+        mask_tensor = transforms.ToTensor()(mask)
+        mask_tensor = (mask_tensor > 0).float()
 
-        if self.transform:
-            mask = self.transform(mask)
+        if self.dct_dir:
+            dct_path = os.path.join(self.dct_dir, base_name + '_dct.npy')
+            if not os.path.exists(dct_path):
+                raise FileNotFoundError(f"Brak DCT: {dct_path}")
 
-        mask = (mask > 0).float()
-        return image, mask
+            dct_array = np.load(dct_path)  # shape: (3, H, W)
+            # Normalizacja DCT (opcjonalna)
+            dct_array = dct_array.astype(np.float32)
+            dct_array -= dct_array.min()
+            dct_array /= (dct_array.max() + 1e-8)
+            dct_tensor = torch.from_numpy(dct_array)
+
+            image_tensor = torch.cat([image_tensor, dct_tensor], dim=0)  # (6, H, W)
+
+        return image_tensor, mask_tensor
 
 # === Model ===
 class ModifiedDeepLab(nn.Module):
@@ -71,7 +73,7 @@ class ModifiedDeepLab(nn.Module):
         return self.model(x)['out']
 
 # === Evaluation ===
-def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_v2", output_dir="val_output", num_visuals=5):
+def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_dct_v5", output_dir="val_output", num_visuals=5):
     os.makedirs(output_dir, exist_ok=True)
 
     model.eval()
@@ -136,15 +138,15 @@ if __name__ == "__main__":
     ])
 
     model = ModifiedDeepLab(in_channels=6)
-    state_dict = torch.load("deeplabv3_casia2_v4.pth", map_location='cpu')
+    state_dict = torch.load("deeplabv3_casia2_dct_v5.pth", map_location='cpu')
     model.load_state_dict(state_dict, strict=False)
 
     val_dataset = CASIA2Dataset(
         img_dir='dataset/new_with_masks/val/manipulated',
         mask_dir='dataset/new_with_masks/val/groundtruth',
-        fft_dir='dataset/new_with_masks/val/fft',
+        dct_dir='dataset/new_with_masks/val/dct',
         transform=transform
     )
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
-    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_v4")
+    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_dct_v5")
