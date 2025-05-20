@@ -107,7 +107,7 @@ def train_model():
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=3)
-    epochs = 5
+    epochs = 15
 
     best_val_loss = float('inf')
     mlflow.set_experiment("convnext_patch_combined_v10")
