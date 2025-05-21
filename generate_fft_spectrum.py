@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Ścieżki do katalogów
-INPUT_DIRS = ['./split/test/Datasets/defacto-inpainting/inpainting_img/img', './split/train/Datasets/defacto-inpainting/inpainting_img/img', './split/valDatasets/defacto-inpainting/inpainting_img/img']
+INPUT_DIRS = ['./split/val/Datasets/defacto-inpainting/inpainting_img/img']
 
 # Obsługiwane formaty obrazów
 IMAGE_EXTENSIONS = ['.png', '.jpg', '.tif']
