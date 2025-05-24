@@ -21,39 +21,7 @@ import timm
 
 # Ustawienia stylu jasny motyw (białe tło, ciemny tekst)
 st.set_page_config(page_title="Detekcja manipulacji", layout="centered")
-st.markdown("""
-    <style>
-    /* Ustaw tło aplikacji na białe i tekst na czarny */
-    .stApp {
-        background-color: #ffffff;
-        color: #000000;
-    }
-    /* Dopasuj style nagłówków i przycisków */
-    h1, h2, h3, .css-18ni7ap.e8zbici2 {
-        color: #000000;
-    }
-    .stButton>button {
-        background-color: #f0f0f0;
-        color: #000000;
-        border: 1px solid #cccccc;
-    }
-    /* Alert boxes (success & error) background and text */
-    div.stAlert, .stAlert {
-        color: #000000 !important;
-    }
-    /* Apply black text to all elements inside alerts */
-    div.stAlert * {
-        color: #000000 !important;
-    }
-    /* Optional: customize success and error backgrounds */
-    div.stAlert.success {
-        background-color: #e6f4ea !important; /* light green */
-    }
-    div.stAlert.error {
-        background-color: #fdecea !important; /* light red */
-    }
-</style>
-""", unsafe_allow_html=True)
+# st.markdown(unsafe_allow_html=True)
 
 # ---------------- Removal detection (DeepLabV3) ----------------
 @st.cache_resource
@@ -125,7 +93,7 @@ class ConvNextUNet(nn.Module):
 @st.cache_resource
 def load_addition_model(device=torch.device('cpu')):
     model = ConvNextUNet()
-    ckpt = 'convnext_patch_segmentation_base.pth'
+    ckpt = 'convnext_v10.pth'
     state = torch.load(ckpt, map_location=device)
     model.load_state_dict(state)
     model.to(device).eval()
@@ -159,6 +127,25 @@ def predict_addition(image: Image.Image, model, device, threshold=0.5):
     mask_img = Image.fromarray(mask_np, mode='L').resize(image.size)
     return mask_img, mask_bool.cpu().numpy()
 
+
+# Funkcja do wyszukiwania maski w dwóch folderach
+def find_mask(image_name, mask_dir1, mask_dir2, mask_dir3, mask_dir4):
+    base_name, _ = os.path.splitext(image_name)
+    mask_path1 = os.path.join(mask_dir1, f"{base_name}_gt.png")
+    mask_path2 = os.path.join(mask_dir2, f"{base_name}.tif")
+    mask_path3 = os.path.join(mask_dir3, f"{base_name}_gt.png")
+    mask_path4 = os.path.join(mask_dir4, f"{base_name}.tif")
+
+    if os.path.exists(mask_path1):
+        return mask_path1
+    elif os.path.exists(mask_path2):
+        return mask_path2
+    elif os.path.exists(mask_path3):
+        return mask_path3
+    elif os.path.exists(mask_path4):
+        return mask_path4
+    return None
+
 # ---------------- Streamlit App ----------------
 def main():
     st.markdown(
@@ -173,31 +160,24 @@ def main():
     MAX_DIM = 1024
     if uploaded:
         img = Image.open(uploaded).convert('RGB')
+        image_name = uploaded.name
         w, h = img.size
         if max(w, h) > MAX_DIM:
             scale = MAX_DIM / max(w, h)
-            # jeśli Pillow ≥ 10.0:
             img = img.resize((int(w * scale), int(h * scale)), resample=Image.Resampling.LANCZOS)
-            # lub (działa też na starszych Pillow):
-            img = img.resize((int(w * scale), int(h * scale)), resample=Image.LANCZOS)
-            # st.warning(f"Obraz przekracza maksymalny rozmiar {MAX_DIM}px; zmieniono rozmiar.")
-        MAX_DISPLAY = 350
-        w_img, h_img = img.size
-        # wybierz czy skalować width czy height
-        if w_img >= h_img:
-            disp_attr = f'width="{MAX_DISPLAY}px"'
+
+        col3, col4 = st.columns(2)
+
+        # Wyświetlenie wgranego obrazu
+        col3.image(img, caption="Wgrane zdjęcie", use_container_width=True)
+
+        # Szukanie maski
+        mask_path = find_mask(image_name, mask_dir1="./dataset/new_with_masks/val/groundtruth", mask_dir2="../../trainig_dataset/defacto-inpainting/split/val/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask", mask_dir3="./dataset/new_with_masks/test/groundtruth", mask_dir4="../trainig_dataset/defacto-inpainting/split/test/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
+        if mask_path:
+            mask_img = Image.open(mask_path)
+            col4.image(mask_img, caption="Maska odpowiadająca zdjęciu", use_container_width=True)
         else:
-            disp_attr = f'height="{MAX_DISPLAY}px"'
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        html = (
-            f'<div style="display:flex; justify-content:center;">'
-            f'<img src="data:image/png;base64,{b64}" {disp_attr}/>'
-            '</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
-        st.markdown("<div style='text-align:center; font-size:0.9rem; margin-bottom:1.5rem; color:grey;'>Analizowany obraz</div>", unsafe_allow_html=True)
+            col4.warning("Nie znaleziono maski odpowiadającej wgranemu zdjęciu.")
 
         col1, col2 = st.columns(2)
         rem_mask, rem_bool = predict_removal(img, rem_model, device)
@@ -214,5 +194,5 @@ def main():
         else:
             col2.success('Nie wykryto doklejeń')
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()

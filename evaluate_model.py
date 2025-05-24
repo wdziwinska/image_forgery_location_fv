@@ -97,6 +97,7 @@ def evaluate_with_threshold(model_path, data_path, threshold, patch_size=128, pa
     y_pred = np.concatenate(y_pred)
 
     print("=== Classification Report ===")
+    print(f"Model: {MODEL_PATH}")
     print(classification_report(y_true, y_pred,
                                 target_names=["background","manipulated"],
                                 zero_division=0))
