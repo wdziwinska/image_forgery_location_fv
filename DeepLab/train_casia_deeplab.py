@@ -6,73 +6,68 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
 from PIL import Image
 import numpy as np
-from scipy.fftpack import dct
-from torchvision.transforms.functional import resize as tf_resize
 
 
-# === Dataset z DCT ===
+# === Dataset z DCT w formacie .npy ===
 class CASIA2Dataset(Dataset):
-    def __init__(self, img_dir, mask_dir, transform=None):
+    def __init__(self, img_dir, mask_dir, dct_dir=None, transform=None, augment=False):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
+        self.dct_dir = dct_dir
         self.transform = transform
+        self.augment = augment
+
         self.images = sorted([
             f for f in os.listdir(img_dir)
             if f.lower().endswith(('.jpg', '.jpeg', '.tif', '.png'))
         ])
 
+        if self.augment:
+            self.augment_pipeline = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1)
+            ])
+
     def __len__(self):
         return len(self.images)
 
-    def compute_dct(self, image_np):
-        # image_np: (H, W, 3), dtype=uint8
-        dct_channels = []
-        for i in range(3):  # R, G, B
-            channel = image_np[:, :, i].astype(float)
-            dct_channel = dct(dct(channel.T, norm='ortho').T, norm='ortho')
-            dct_channels.append(dct_channel)
-        dct_img = np.stack(dct_channels, axis=2)
-        return dct_img
-
     def __getitem__(self, idx):
         img_filename = self.images[idx]
-        img_path = os.path.join(self.img_dir, img_filename)
-
         base_name = os.path.splitext(img_filename)[0]
+
+        img_path = os.path.join(self.img_dir, img_filename)
         mask_path = os.path.join(self.mask_dir, base_name + '_gt.png')
+        dct_path = os.path.join(self.dct_dir, base_name + '_dct.npy')
 
         if not os.path.exists(mask_path):
-            raise FileNotFoundError(f"Maska nie znaleziona: {mask_path}")
+            raise FileNotFoundError(f"Brak maski: {mask_path}")
+        if not os.path.exists(dct_path):
+            raise FileNotFoundError(f"Brak DCT: {dct_path}")
 
-        image = Image.open(img_path).convert('RGB')
-        mask = Image.open(mask_path).convert('L')
+        # === Wczytaj obraz i maskę
+        image = Image.open(img_path).convert('RGB').resize((256, 256))
+        mask = Image.open(mask_path).convert('L').resize((256, 256))
 
-        image = image.resize((256, 256))
-        mask = mask.resize((256, 256))
-        image_np = np.array(image)
+        # === Augmentacja RGB (tylko obraz, nie maska ani DCT)
+        if self.augment:
+            image = self.augment_pipeline(image)
 
-        dct_np = self.compute_dct(image_np)
+        image_tensor = transforms.ToTensor()(image)  # RGB: (3, H, W)
 
-        combined = np.concatenate([image_np, dct_np], axis=2)  # (H, W, 6)
-        combined = combined.astype(np.float32) / 255.0
+        # === Wczytaj DCT z pliku .npy
+        dct_array = np.load(dct_path).astype(np.float32)  # (3, H, W)
+        dct_array -= dct_array.min()
+        dct_array /= dct_array.max() + 1e-8
+        dct_tensor = torch.from_numpy(dct_array)  # (3, H, W)
 
-        image_tensor = torch.from_numpy(combined).permute(2, 0, 1)  # (C, H, W)
-        mask_tensor = torch.from_numpy(np.array(mask)).unsqueeze(0).float() / 255.0
+        combined = torch.cat([image_tensor, dct_tensor], dim=0)  # (6, H, W)
+
+        mask_tensor = transforms.ToTensor()(mask)
         mask_tensor = (mask_tensor > 0).float()
 
-        return image_tensor, mask_tensor
+        return combined, mask_tensor
 
-
-# === Transform (dla masek RGB-DCT nie trzeba tu) ===
-transform = None
-
-# === DataLoader ===
-dataset = CASIA2Dataset(
-    img_dir='dataset/new_with_masks/train/manipulated',
-    mask_dir='dataset/new_with_masks/train/groundtruth',
-    transform=transform
-)
-dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
 # === Model ===
 class ModifiedDeepLab(nn.Module):
@@ -85,27 +80,36 @@ class ModifiedDeepLab(nn.Module):
     def forward(self, x):
         return self.model(x)['out']
 
-# === Trening ===
+
+# === Inicjalizacja i trening ===
 device = torch.device('cpu')
+dataset = CASIA2Dataset(
+    img_dir='dataset/new_with_masks/train/manipulated',
+    mask_dir='dataset/new_with_masks/train/groundtruth',
+    dct_dir='dataset/new_with_masks/train/dct'
+)
+dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+
 model = ModifiedDeepLab(in_channels=6).to(device)
-criterion = nn.BCEWithLogitsLoss()
+criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([5.0]))
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-for epoch in range(20):
-    model.train()
-    running_loss = 0.0
-    for images, masks in dataloader:
-        images, masks = images.to(device), masks.to(device)
-        outputs = model(images)
-        loss = criterion(outputs, masks)
+if __name__ == "__main__":
+    for epoch in range(40):
+        model.train()
+        running_loss = 0.0
+        for images, masks in dataloader:
+            images, masks = images.to(device), masks.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, masks)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        running_loss += loss.item()
+            running_loss += loss.item()
 
-    print(f"Epoch {epoch + 1}, Loss: {running_loss / len(dataloader)}")
-    torch.save(model.state_dict(), f'deeplabv3_casia2_dct_epoch{epoch+1}_v5.pth')
+        print(f"Epoch {epoch + 1}, Loss: {running_loss / len(dataloader)}")
+        torch.save(model.state_dict(), f'deeplabv3_casia2_dct_epoch{epoch+1}_v6.pth')
 
-torch.save(model.state_dict(), f'deeplabv3_casia2_dct_v5.pth')
+    torch.save(model.state_dict(), f'deeplabv3_casia2_dct_v6.pth')

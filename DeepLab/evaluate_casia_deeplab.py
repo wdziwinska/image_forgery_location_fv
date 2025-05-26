@@ -73,7 +73,7 @@ class ModifiedDeepLab(nn.Module):
         return self.model(x)['out']
 
 # === Evaluation ===
-def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_dct_v5", output_dir="val_output", num_visuals=5):
+def evaluate_model(model, dataloader, model_name="deeplabv3_casia2_dct_epoch24_v6", output_dir="val_output", num_visuals=5):
     os.makedirs(output_dir, exist_ok=True)
 
     model.eval()
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     ])
 
     model = ModifiedDeepLab(in_channels=6)
-    state_dict = torch.load("deeplabv3_casia2_dct_v5.pth", map_location='cpu')
+    state_dict = torch.load("deeplabv3_casia2_dct_epoch24_v6.pth", map_location='cpu')
     model.load_state_dict(state_dict, strict=False)
 
     val_dataset = CASIA2Dataset(
@@ -149,4 +149,4 @@ if __name__ == "__main__":
     )
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
-    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_dct_v5")
+    evaluate_model(model, val_loader, model_name="deeplabv3_casia2_dct_epoch24_v6")
