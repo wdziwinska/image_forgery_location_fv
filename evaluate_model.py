@@ -90,13 +90,14 @@ def evaluate_with_threshold(model_path, data_path, threshold, patch_size=128, pa
         y_true.append(mask.view(-1).cpu().numpy().astype(int))
         y_pred.append(preds.view(-1).cpu().numpy().astype(int))
 
-        if idx < 10:
-            visualize_sample(img[0], mask[0], probs[0], preds[0], idx, threshold)
+        # if idx < 10:
+        #     visualize_sample(img[0], mask[0], probs[0], preds[0], idx, threshold)
 
     y_true = np.concatenate(y_true)
     y_pred = np.concatenate(y_pred)
 
     print("=== Classification Report ===")
+    print(f"Model: {model_path}")
     print(classification_report(y_true, y_pred,
                                 target_names=["background","manipulated"],
                                 zero_division=0))
