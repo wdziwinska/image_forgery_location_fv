@@ -24,15 +24,16 @@ st.set_page_config(page_title="Detekcja manipulacji", layout="centered")
 # st.markdown(unsafe_allow_html=True)
 
 # ---------------- Removal detection (DeepLabV3) ----------------
+# Zmodyfikowana funkcja load_removal_model
 @st.cache_resource
 def load_removal_model(device=torch.device('cpu')):
-    # Utworzenie architektury DeepLabV3
     model = models.segmentation.deeplabv3_resnet50(
         pretrained=False, progress=True,
         num_classes=1, aux_loss=False
     )
     model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
-    ckpt_path = os.path.join('manipulation_detector_v1.pt')
+    model.backbone.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)  # Zmiana na 4 kanały
+    ckpt_path = os.path.join('manipulation_detector_fft_v6.pt')
     state = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state, strict=False)
     model.to(device).eval()
@@ -44,10 +45,16 @@ removal_transform = transforms.Compose([
     transforms.ToTensor(),
 ])
 
+# Zmodyfikowana funkcja predict_removal
 def predict_removal(image: Image.Image, model, device, threshold=0.5):
-    inp = removal_transform(image).unsqueeze(0).to(device)
+    rgb = removal_transform(image)
+    fft = compute_fft_channel(image)
+    fft = F.interpolate(
+        fft.unsqueeze(0), size=(256, 256), mode='bilinear', align_corners=False
+    )[0]
+    x = torch.cat([rgb, fft], dim=0).unsqueeze(0).to(device)
     with torch.no_grad():
-        out = model(inp)['out']
+        out = model(x)['out']
         prob = torch.sigmoid(out)[0, 0]
     mask_bool = prob > threshold
     mask_np = (mask_bool.cpu().numpy().astype(np.uint8) * 255)
@@ -147,7 +154,7 @@ def find_mask(image_name, mask_dir1, mask_dir2, mask_dir3, mask_dir4):
     return None
 
 # ---------------- Streamlit App ----------------
-def main():
+if __name__ == '__main__':
     st.markdown(
         "<h1 style='font-size:32px; text-align:center;'>Detekcja manipulacji obrazu:<br>usunięcia i doklejenia</h1>",
         unsafe_allow_html=True
@@ -172,7 +179,7 @@ def main():
         col3.image(img, caption="Wgrane zdjęcie", use_container_width=True)
 
         # Szukanie maski
-        mask_path = find_mask(image_name, mask_dir1="./dataset/new_with_masks/val/groundtruth", mask_dir2="../../trainig_dataset/defacto-inpainting/split/val/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask", mask_dir3="./dataset/new_with_masks/test/groundtruth", mask_dir4="../trainig_dataset/defacto-inpainting/split/test/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
+        mask_path = find_mask(image_name, mask_dir1="./dataset/new_with_masks/test/groundtruth", mask_dir2="../../trainig_dataset/defacto-inpainting/split/test/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask", mask_dir3="./dataset/new_with_masks/test/groundtruth", mask_dir4="../trainig_dataset/defacto-inpainting/split/test/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
         if mask_path:
             mask_img = Image.open(mask_path)
             col4.image(mask_img, caption="Maska odpowiadająca zdjęciu", use_container_width=True)
@@ -193,6 +200,6 @@ def main():
             col2.error('Doklejono obiekty!')
         else:
             col2.success('Nie wykryto doklejeń')
-
-if __name__ == '__main__':
-    main()
+#
+# if __name__ == '__main__':
+#     main()
