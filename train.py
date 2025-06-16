@@ -59,65 +59,66 @@ class ManipulationDataset(Dataset):
         img_combined = torch.cat([img, fft_tensor], dim=0)  # [4, H, W]
         return img_combined, mask, id_
 
-# Ścieżki
-base = "split"
-train_img = os.path.join(base, "train/Datasets/defacto-inpainting/inpainting_img/img")
-train_fft = os.path.join("fft_spectrum/train/Datasets/defacto-inpainting/inpainting_img/img")
-train_mask = os.path.join(base, "train/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
+if __name__ == "__main__":
+    # Ścieżki
+    base = "split"
+    train_img = os.path.join(base, "train/Datasets/defacto-inpainting/inpainting_img/img")
+    train_fft = os.path.join("fft_spectrum/train/Datasets/defacto-inpainting/inpainting_img/img")
+    train_mask = os.path.join(base, "train/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
 
-val_img = os.path.join(base, "val/Datasets/defacto-inpainting/inpainting_img/img")
-val_fft = os.path.join("fft_spectrum/val/Datasets/defacto-inpainting/inpainting_img/img")
-val_mask = os.path.join(base, "val/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
+    val_img = os.path.join(base, "val/Datasets/defacto-inpainting/inpainting_img/img")
+    val_fft = os.path.join("fft_spectrum/val/Datasets/defacto-inpainting/inpainting_img/img")
+    val_mask = os.path.join(base, "val/Datasets/defacto-inpainting/inpainting_annotations/inpaint_mask")
 
-# Dataset i DataLoader
-train_ds = ManipulationDataset(train_img, train_fft, train_mask)
-val_ds = ManipulationDataset(val_img, val_fft, val_mask)
+    # Dataset i DataLoader
+    train_ds = ManipulationDataset(train_img, train_fft, train_mask)
+    val_ds = ManipulationDataset(val_img, val_fft, val_mask)
 
-train_loader = DataLoader(train_ds, batch_size=8, shuffle=True)
-val_loader = DataLoader(val_ds, batch_size=8)
+    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=8)
 
-# Model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = deeplabv3_resnet50(pretrained=True)
+    # Model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = deeplabv3_resnet50(pretrained=True)
 
-# Zamiana 1. warstwy wejściowej na 4 kanały
-new_conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
-with torch.no_grad():
-    new_conv1.weight[:, :3] = model.backbone.conv1.weight  # kopiujemy RGB
-    new_conv1.weight[:, 3] = model.backbone.conv1.weight[:, 0] * 0.0  # inicjalizacja kanału fft
-model.backbone.conv1 = new_conv1
+    # Zamiana 1. warstwy wejściowej na 4 kanały
+    new_conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    with torch.no_grad():
+        new_conv1.weight[:, :3] = model.backbone.conv1.weight  # kopiujemy RGB
+        new_conv1.weight[:, 3] = model.backbone.conv1.weight[:, 0] * 0.0  # inicjalizacja kanału fft
+    model.backbone.conv1 = new_conv1
 
-# Dopasowanie wyjścia do klasy binarnej
-model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
-model = model.to(device)
+    # Dopasowanie wyjścia do klasy binarnej
+    model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
+    model = model.to(device)
 
-# Optymalizacja
-criterion = nn.BCEWithLogitsLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    # Optymalizacja
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-# Trening
-for epoch in range(10):
-    model.train()
-    total_loss = 0
-    for images, masks, ids in train_loader:
-        images, masks = images.to(device), masks.to(device)
-        outputs = model(images)['out']
-        loss = criterion(outputs, masks)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    print(f"Epoch {epoch+1} - Train Loss: {total_loss:.4f}")
-    torch.save(model.state_dict(), "./trained_models/manipulation_detector_fft_v6.pt")
-    print("Model zapisany jako manipulation_detector_fft_v6.pt")
+    # Trening
+    for epoch in range(10):
+        model.train()
+        total_loss = 0
+        for images, masks, ids in train_loader:
+            images, masks = images.to(device), masks.to(device)
+            outputs = model(images)['out']
+            loss = criterion(outputs, masks)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f"Epoch {epoch+1} - Train Loss: {total_loss:.4f}")
+        torch.save(model.state_dict(), "./trained_models/manipulation_detector_fft_v6.pt")
+        print("Model zapisany jako manipulation_detector_fft_v6.pt")
 
-# Ewaluacja
-model.eval()
-with torch.no_grad():
-    val_loss = 0
-    for images, masks in val_loader:
-        images, masks = images.to(device), masks.to(device)
-        outputs = model(images)['out']
-        loss = criterion(outputs, masks)
-        val_loss += loss.item()
-    print(f"Validation Loss: {val_loss:.4f}")
+    # Ewaluacja
+    model.eval()
+    with torch.no_grad():
+        val_loss = 0
+        for images, masks in val_loader:
+            images, masks = images.to(device), masks.to(device)
+            outputs = model(images)['out']
+            loss = criterion(outputs, masks)
+            val_loss += loss.item()
+        print(f"Validation Loss: {val_loss:.4f}")
