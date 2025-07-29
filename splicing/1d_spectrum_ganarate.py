@@ -3,7 +3,8 @@ from scipy.fft import fft2, fftshift
 import matplotlib.pyplot as plt
 
 # Wczytaj obraz jako 2D-array (0..1)
-img = plt.imread('../../Testy/inpainting-manipulated-original-the-same-pic/32ff1eb3f7df48e693a47689142619fc2DGwIiNrMiIjhPkU-27.png')[:,:,0]
+img = plt.imread(
+    '../../../Testy/inpainting-manipulated-original-the-same-pic/32ff1eb3f7df48e693a47689142619fc2DGwIiNrMiIjhPkU-27.png')[:, :, 0]
 
 # oblicz FFT i log-amplitudę
 F = fftshift(fft2(img))
