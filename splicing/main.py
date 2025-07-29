@@ -94,10 +94,10 @@ def train_model():
     transform = T.Compose([
         T.Resize((128,128)), T.ColorJitter(0.2,0.2,0.2,0.1),
         T.RandomHorizontalFlip(), T.RandomRotation(10), T.ToTensor()])
-    ds_train = CombinedPatchSegDataset("dataset/new_with_masks/train", patch_size=128,
+    ds_train = CombinedPatchSegDataset("../dataset/new_with_masks/train", patch_size=128,
                                        patches_per_image=10, transform=transform)
-    ds_val   = CombinedPatchSegDataset("dataset/new_with_masks/val",   patch_size=128,
-                                       patches_per_image=5,  transform=transform)
+    ds_val   = CombinedPatchSegDataset("../dataset/new_with_masks/val", patch_size=128,
+                                       patches_per_image=5, transform=transform)
     weights = [2.0 if ds_train[i][1].sum()>0 else 1.0 for i in range(len(ds_train))]
     sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
     loader_train = DataLoader(ds_train, batch_size=8, sampler=sampler)
@@ -149,8 +149,8 @@ def train_model():
 
         # Final artifact
         mlflow.pytorch.log_model(model, artifact_path="model")
-        torch.save(model.state_dict(), "convnext_v10.pth")
-        mlflow.log_artifact("convnext_v10.pth")
+        torch.save(model.state_dict(), "../convnext_v10.pth")
+        mlflow.log_artifact("../convnext_v10.pth")
 
 if __name__ == "__main__":
     train_model()
